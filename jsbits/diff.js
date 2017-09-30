@@ -179,10 +179,29 @@ function syncChildren (os, ns, parent) {
 	*/
 	if (oldFirstIndex > oldLastIndex) {
 	    createElement(nFirst);
-	    /* insertBefore's semantics will append a node if the second argument provided is `null` or `undefined`.
-	       Otherwise, it will insert node.domRef before oLast.domRef. */
-            parent.insertBefore (nFirst.domRef, os[oldLastIndex] ? os[oldLastIndex].domRef.nextSibling : null);
-	    newFirstIndex++;
+	    /* We are truly at the end of the array, just append new stuff */
+	    if (oldFirstIndex >= os.length) {
+		while (newLastIndex > newFirstIndex) {
+		    nFirst = ns[newFirstIndex];
+		    createElement(nFirst);
+		    os.push(nFirst);
+      	            parent.insertBefore (nFirst.domRef, null);
+		    newFirstIndex++;
+		} break;
+	    }
+	    /* We are somewhere else inside of the array, proceed w/ caution */
+	    else {
+    	      tmp = os[oldLastIndex].domRef.nextSibling;
+	      while (newLastIndex > newFirstIndex) {
+		    nFirst = ns[newFirstIndex];
+		    createElement(nFirst);
+		    oldLastIndex++;
+		    os.splice(oldLastIndex, nFirst);
+      	            parent.insertBefore (nFirst.domRef, tmp);
+		    tmp = nFirst.domRef.nextSibling;
+		    newFirstIndex++;
+	       } break;
+	    }
 	}
 	/* No more new nodes, delete all remaining nodes in old list
 	   -> [ a b c ] <- old children
