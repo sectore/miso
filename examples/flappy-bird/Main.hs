@@ -3,13 +3,14 @@
 
 module Main where
 
-import Control.Concurrent
-import Control.Monad
-import Control.Monad.IO.Class
-import System.Random
-import Miso
-import Miso.String
-import Miso.Util (now)
+import           Control.Concurrent
+import           Control.Monad
+import           Control.Monad.IO.Class
+import           System.Random
+import           Miso
+import           Miso.String (MisoString)
+import qualified Miso.String as S
+import           Miso.Util (now)
 import qualified Data.Map as M
 
 -- -----------------------------
@@ -36,15 +37,18 @@ main = startApp App {..}
 planeXPos = 70 -- gameWidth / 2 - 100
 tick = 50000 -- 50ms
 bgScrollVOffset = 50 / 1000 -- 50px / 1000ms
+pillarWidth = 30
+minPillarHeight = round $ gameHeight / 8
 timeBetweenPillars = 1.6
 gapToPlaneRatio = 3.5
+gapHeight = planeHeight * gapToPlaneRatio
 
 randomHeight :: IO Double
 randomHeight =
   let
-    gapHeight = planeHeight * gapToPlaneRatio
+    gapHeight' = planeHeight * gapToPlaneRatio
     minHeight = gameHeight / 8
-    maxHeight = gameHeight - minHeight - gapHeight
+    maxHeight = gameHeight - minHeight - gapHeight'
   in
   randomRIO (minHeight, maxHeight)
 
@@ -56,15 +60,6 @@ data PillarVPos
   = Top
   | Bottom
   deriving (Show, Eq)
-
-
-data Pillar = Pillar
-  { x :: Double
-  , y :: Double
-  , height :: Int
-  , passed :: Bool
-  , vPos :: PillarVPos
-  } deriving (Show, Eq)
 
 data Model = Model
   { counter :: !Int
@@ -96,6 +91,8 @@ initialModel = Model
 data Action
   = SayHello
   | NoOp
+  | AddPillars !Double
+  | RandomPillars
   | Time !Double
   deriving (Show, Eq)
 
@@ -105,22 +102,62 @@ updateModel SayHello model =
       newModel = model { counter = newCount }
   in
     newModel <# do
-      putStrLn $ "Hello " <> show newCount
+      putStrLn $ "Hello " ++ show newCount
       pure NoOp
 
 updateModel NoOp model = noEff model
 
-updateModel (Time newTime) model = noEff newModel
+updateModel (AddPillars bottomHeight) model = noEff newModel
   where
     newModel = model
-      { delta = newTime - time model -- ca. 50ms == tick
-      , time = newTime
-      , bgXPos =
-        if bgXPos model >= gameWidth
-          then 0
-          else bgXPos model + delta model * bgScrollVOffset
-      , planeYPos = planeYPos model + sin (bgXPos model / 20)
-      }
+      { pillars = createPillars (time model) bottomHeight model }
+
+updateModel RandomPillars model =
+  model <# (AddPillars <$> randomHeight)
+
+updateModel (Time newTime) model =
+    let newModel = model
+          { delta = newTime - time model -- ca. 50ms == tick
+          , time = newTime
+          , bgXPos =
+              if bgXPos model >= gameWidth
+                then 0
+                else bgXPos model + delta model * bgScrollVOffset
+          , planeYPos = planeYPos model + sin (bgXPos model / 20)
+          }
+    in newModel <# do
+      pure $ if null (pillars model)
+              then RandomPillars
+              else NoOp
+
+
+data Pillar = Pillar
+  { x :: Double
+  , y :: Double
+  , height :: Int
+  , passed :: Bool
+  , vPos :: PillarVPos
+  } deriving (Show, Eq)
+
+
+createPillars :: Double -> Double -> Model -> [Pillar]
+createPillars time bottomHeight model =
+  let xPos = gameWidth / 2 - pillarWidth / 2
+      bottomPillar = Pillar
+        { x = xPos
+        , y = gameHeight - bottomHeight
+        , height = round bottomHeight
+        , vPos = Bottom
+        , passed = False
+        }
+      topPillar = Pillar
+        { x = xPos
+        , y = 0
+        , height = round $ gameHeight - bottomHeight - gapHeight
+        , vPos = Top
+        , passed = False
+        }
+  in [bottomPillar, topPillar]
 
 -- -----------------------------
 -- view
@@ -130,26 +167,29 @@ mainView :: Model -> View Action
 mainView m@Model{..} =
   div_
     []
-    [
-       button_ [ onClick SayHello ] [ text "Say hello" ]
-     , h3_ [] [ text (ms $ "clicked " ++ show counter) ]
-     , h3_ [] [ text (ms $ "time " ++ show time) ]
-     , h3_ [] [ text (ms $ "delta " ++ show delta) ]
-     , h3_ [] [ text (ms $ "bgXPos " ++ show bgXPos) ]
-     , div_
+    [ div_
         [ style_ wrapperStyle ]
         -- ^ container to wrap all game elements
         [ bgView $ negate bgXPos
         -- ^ left hand part of scrollable background image
         , bgView $ gameWidth - bgXPos
         -- ^ right-hand part of scrollable background image
+        , pillarsView pillars
+        -- ^ pillars
         , planeView
         , headlineView
         , scoreView
         ]
-     , div_ [] $ Prelude.map pillarView pillars
+    , button_ [ onClick SayHello ] [ text "Say hello" ]
+    , button_ [ onClick RandomPillars ] [ text "random pillars" ]
+    , p_ [] [ text (S.ms $ "clicked " ++ show counter) ]
+    , p_ [] [ text (S.ms $ show m) ]
     ]
   where
+
+    pillarsView :: [Pillar] -> View Action
+    pillarsView pillars =
+      div_ [] $ map pillarView pillars
 
     pillarView :: Pillar -> View Action
     pillarView p@Pillar{..} =
@@ -158,16 +198,20 @@ mainView m@Model{..} =
         imgName = if vPos == Top
                     then "topRock"
                     else "bottomRock"
+        bgColorName :: PillarVPos -> String
+        bgColorName Top = "green"
+        bgColorName Bottom = "blue"
       in
       img_
-        [ src_ $ ms $ "images/" ++ imgName ++ ".png"
+        [ src_ $ S.ms $ "images/" ++ imgName ++ ".png"
+        , width_ $ S.pack $ show pillarWidth
+        , height_ $ S.pack $ show height
         , style_ $
             M.fromList
               [ ("display", "block")
               , ("position", "absolute")
-              , ("background-color", "green")
-              , ("x", ms $ show x)
-              , ("y", ms $ show y)
+              , ("background-color", S.ms $ bgColorName vPos)
+              , ("transform", S.ms $ "matrix(1,0,0,1," ++ show x ++ ", " ++ show y ++ ")")
               ]
         ]
         []
@@ -186,7 +230,7 @@ mainView m@Model{..} =
               , ("height", px 46)
               , ("position", "absolute")
               , ("background-color", "grey")
-              , ("transform", ms $ "matrix(1,0,0,1," ++ show xPos ++ ",150)")
+              , ("transform", S.ms $ "matrix(1,0,0,1," ++ show xPos ++ ",150)")
               ]
         ]
         []
@@ -201,7 +245,7 @@ mainView m@Model{..} =
             M.fromList
               [ ("font-size", px 50)
               , ("text-shadow",
-                    ms $ "-1px 0 "
+                    S.ms $ "-1px 0 "
                           ++ scoreOutlineHexColor
                           ++ ", 0 1px "
                           ++ scoreOutlineHexColor
@@ -218,7 +262,7 @@ mainView m@Model{..} =
               , ("width", "100%")
               ]
         ]
-        [ text $ ms $ show score]
+        [ text $ S.ms $ show score]
 
     planeView :: View Action
     planeView =
@@ -231,7 +275,7 @@ mainView m@Model{..} =
               , ("height", px planeHeight)
               , ("position", "absolute")
               , ("background-color", "grey")
-              , ("transform", ms $ "matrix(1,0,0,1," ++ show planeXPos ++ ", " ++ show planeYPos ++ ")")
+              , ("transform", S.ms $ "matrix(1,0,0,1," ++ show planeXPos ++ ", " ++ show planeYPos ++ ")")
               ]
         ]
         []
@@ -247,7 +291,7 @@ mainView m@Model{..} =
                 , ("height", px gameHeight)
                 , ("position", "absolute")
                 , ("background-color", "darkgrey")
-                , ("transform", ms $ "matrix(1,0,0,1," ++ show xPos ++ ",0)")
+                , ("transform", S.ms $ "matrix(1,0,0,1," ++ show xPos ++ ",0)")
                 ]
           ]
           []
@@ -274,4 +318,4 @@ every n f sink = void . forkIO . forever $ do
 -- | Creates a pixel value
 px :: Show a => a -> MisoString
 px v =
-  ms $ show v ++ "px"
+  S.ms $ show v ++ "px"
