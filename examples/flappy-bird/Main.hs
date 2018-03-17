@@ -266,8 +266,8 @@ mainView m@Model{..} =
 -- -----------------------------
 
 -- | Utility for periodic tick subscriptions
-every :: Int -> (Double -> action) -> Sub action model
-every n f _ sink = void . forkIO . forever $ do
+every :: Int -> (Double -> action) -> Sub action
+every n f sink = void . forkIO . forever $ do
   threadDelay n
   sink =<< f <$> now
 
