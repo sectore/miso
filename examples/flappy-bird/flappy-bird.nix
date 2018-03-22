@@ -6,7 +6,7 @@ mkDerivation {
   isLibrary = false;
   isExecutable = true;
   executableHaskellDepends = [ base containers random miso ];
-  description = "Miso's flappy birds example";
+  description = "Miso flappy bird example";
   license = stdenv.lib.licenses.bsd3;
   postInstall = ''
     mkdir -p $out/bin/flappy-bird.jsexe/images

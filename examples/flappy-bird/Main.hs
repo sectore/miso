@@ -26,7 +26,7 @@ main = startApp App {..}
     view   = mainView
     events = defaultEvents
     mountPoint = Nothing
-    subs   = [ every tick Time ]
+    subs   = [ every (round tick) Time ]
 
 -- -----------------------------
 -- constants
@@ -35,11 +35,13 @@ main = startApp App {..}
 (gameWidth, gameHeight) = (480, 480)
 (planeWidth, planeHeight) = (60, 35)
 planeXPos = 70 -- gameWidth / 2 - 100
-tick = 50000 -- 50ms
-bgScrollVOffset = 50 / 1000 -- 50px / 1000ms
+tick = 50 * 1000 -- every 50ms
+sec = 50 * 20  -- 1000ms
+bgScrollVOffset = 50 / 1000 -- background movement: 50px / 1000ms
+fgScrollVOffset = 60 / 1000 -- forground movement: 60px / 1000ms
 pillarWidth = 30
 minPillarHeight = round $ gameHeight / 8
-timeBetweenPillars = 1.6
+timeBetweenPillars =  4.5 * sec -- 4.5 sec
 gapToPlaneRatio = 3.5
 gapHeight = planeHeight * gapToPlaneRatio
 
@@ -68,7 +70,7 @@ data Model = Model
   , bgXPos :: !Double
   , planeYPos :: !Double
   , score :: !Int
-  , pillars :: [Pillar]
+  , pillars :: Pillars
   , timeToPillar :: !Double
   } deriving (Show, Eq)
 
@@ -107,29 +109,47 @@ updateModel SayHello model =
 
 updateModel NoOp model = noEff model
 
-updateModel (AddPillars bottomHeight) model = noEff newModel
+updateModel (AddPillars bottomHeight) m@Model{pillars=currentPillars} =
+  noEff newModel
   where
-    newModel = model
-      { pillars = createPillars (time model) bottomHeight model }
+    newModel = m{ pillars = currentPillars ++ createPillars bottomHeight }
 
 updateModel RandomPillars model =
   model <# (AddPillars <$> randomHeight)
 
 updateModel (Time newTime) model =
-    let newModel = model
-          { delta = newTime - time model -- ca. 50ms == tick
+    let delta' = newTime - time model -- ca. 50ms == tick
+        timeToPillar' = if timeToPillar model <= 0
+                            then timeBetweenPillars
+                            else timeToPillar model - delta'
+        newModel = model
+          { delta = delta'
           , time = newTime
           , bgXPos =
               if bgXPos model >= gameWidth
                 then 0
-                else bgXPos model + delta model * bgScrollVOffset
+                else bgXPos model + delta' * bgScrollVOffset
           , planeYPos = planeYPos model + sin (bgXPos model / 20)
+          , timeToPillar = timeToPillar'
+          , pillars = updatePillars delta' (pillars model)
           }
     in newModel <# do
-      pure $ if null (pillars model)
-              then RandomPillars
-              else NoOp
+      pure $ if timeToPillar' == timeBetweenPillars
+                then RandomPillars
+                else NoOp
 
+updatePillars :: Double -> Pillars -> Pillars
+updatePillars delta =
+  -- 1. update each pillar
+  -- 2. remove (filter out) all pillars running out of visible game area
+  filter ((<) (negate pillarWidth) . x) . map (updatePillar delta)
+
+updatePillar :: Double -> Pillar -> Pillar
+updatePillar delta p@Pillar{x=currentX} =
+  p{ x = currentX - (delta * fgScrollVOffset) }
+
+
+type Pillars = [Pillar]
 
 data Pillar = Pillar
   { x :: Double
@@ -140,18 +160,17 @@ data Pillar = Pillar
   } deriving (Show, Eq)
 
 
-createPillars :: Double -> Double -> Model -> [Pillar]
-createPillars time bottomHeight model =
-  let xPos = gameWidth / 2 - pillarWidth / 2
-      bottomPillar = Pillar
-        { x = xPos
+createPillars :: Double -> Pillars
+createPillars bottomHeight =
+  let bottomPillar = Pillar
+        { x = gameWidth
         , y = gameHeight - bottomHeight
         , height = round bottomHeight
         , vPos = Bottom
         , passed = False
         }
       topPillar = Pillar
-        { x = xPos
+        { x = gameWidth
         , y = 0
         , height = round $ gameHeight - bottomHeight - gapHeight
         , vPos = Top
@@ -183,11 +202,12 @@ mainView m@Model{..} =
     , button_ [ onClick SayHello ] [ text "Say hello" ]
     , button_ [ onClick RandomPillars ] [ text "random pillars" ]
     , p_ [] [ text (S.ms $ "clicked " ++ show counter) ]
+    , p_ [] [ text (S.ms $ "pillar pairs " ++ show (length pillars)) ]
     , p_ [] [ text (S.ms $ show m) ]
     ]
   where
 
-    pillarsView :: [Pillar] -> View Action
+    pillarsView :: Pillars -> View Action
     pillarsView pillars =
       div_ [] $ map pillarView pillars
 
@@ -262,7 +282,7 @@ mainView m@Model{..} =
               , ("width", "100%")
               ]
         ]
-        [ text $ S.ms $ show score]
+        [ text $ S.ms score]
 
     planeView :: View Action
     planeView =
